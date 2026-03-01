@@ -12,6 +12,14 @@ import window_utils
 import ctypes
 import os
 
+# optional requests availability (used for update checks)
+try:
+    import requests  # type: ignore
+    HAVE_REQUESTS = True
+except Exception:
+    requests = None
+    HAVE_REQUESTS = False
+
 # application version (bump when releasing)
 __version__ = "1.0.0"
 
@@ -45,19 +53,76 @@ CONFIG_FILE = "config.json"
 
 # optional auto-update checker (stub)
 def check_for_updates():
-    """Query GitHub releases and log if a newer version exists.
+    """Query GitHub releases and return (latest_tag_or_None, error_or_None).
 
-    This is a lightweight non-critical operation; failures are ignored.
+    Error values: 'missing_requests', 'network', 'http', or None on success/no-error.
     """
+    def _norm(v):
+        if not v:
+            return None
+        return str(v).lstrip("vV").strip()
+
+    def _is_newer(latest, current):
+        # safe semver-ish comparison: compare numeric components
+        try:
+            la = tuple(int(x) for x in _norm(latest).split("."))
+            cu = tuple(int(x) for x in _norm(current).split("."))
+            return la > cu
+        except Exception:
+            return _norm(latest) != _norm(current)
+
+    if not HAVE_REQUESTS:
+        logger.update_log("⚠️ Update check skipped: 'requests' not available")
+        return None, "missing_requests"
+
+    url = "https://api.github.com/repos/FH5-Sniper/fh5_sniper/releases/latest"
     try:
-        import requests
-        url = "https://api.github.com/repos/yourusername/fh5_sniper/releases/latest"
         resp = requests.get(url, timeout=3)
-        if resp.ok:
-            latest = resp.json().get("tag_name")
-            if latest and latest != __version__:
-                logger.update_log(f"🔄 New version available: {latest} (current {__version__})")
     except Exception:
+        logger.update_log("⚠️ Update check failed (network error)")
+        return None, "network"
+
+    if not resp.ok:
+        logger.update_log(f"⚠️ Update check HTTP error: {resp.status_code}")
+        return None, "http"
+
+    try:
+        latest = resp.json().get("tag_name")
+        if latest and _is_newer(latest, __version__):
+            logger.update_log(f"🔄 New version available: {latest} (current {__version__})")
+            return str(latest), None
+        # no newer release
+        logger.update_log("✅ No updates found")
+        return None, None
+    except Exception:
+        logger.update_log("⚠️ Update check failed (parsing error)")
+        return None, "network"
+
+
+def show_update_popup(latest_tag):
+    try:
+        popup = tk.Toplevel(root)
+        popup.title("Update Available")
+        popup.transient(root)
+        popup.grab_set()
+
+        tb.Label(popup, text=f"New version available: {latest_tag}", font=("Arial", 12, "bold")).pack(padx=20, pady=(12,6))
+        tb.Label(popup, text=f"Current version: {__version__}", font=("Arial", 10)).pack(padx=20, pady=(0,10))
+
+        def open_release():
+            import webbrowser
+            webbrowser.open("https://github.com/FH5-Sniper/fh5_sniper/releases/latest")
+            popup.destroy()
+
+        btn_frame = tb.Frame(popup)
+        btn_frame.pack(pady=(6,12))
+        tb.Button(btn_frame, text="Open Releases", command=open_release, bootstyle=INFO).pack(side="left", padx=6)
+        tb.Button(btn_frame, text="Dismiss", command=popup.destroy, bootstyle=SECONDARY).pack(side="left", padx=6)
+
+        popup.protocol("WM_DELETE_WINDOW", popup.destroy)
+        root.wait_window(popup)
+    except Exception:
+        # UI failed; ignore
         pass
 
 # --- BUILD UI ---
@@ -71,7 +136,7 @@ try:
     root.iconbitmap(_icon_file)
 except Exception:
     pass
-root.geometry("930x700")
+root.geometry("930x650")
 
 # style tweaks for more modern appearance and better readability
 style = tb.Style()
@@ -93,8 +158,12 @@ def handle_exception(exc_type, exc_value, exc_traceback):
 
 sys.excepthook = handle_exception
 
-notebook = tb.Notebook(root)
-notebook.pack(fill="both", expand=True, padx=10, pady=10)
+# Top row: notebook on the left, quick actions (updates) on the right
+top_row = tb.Frame(root)
+top_row.pack(fill="x", padx=10, pady=10)
+
+notebook = tb.Notebook(top_row)
+notebook.pack(side="left", fill="both", expand=True)
 
 # ---------- Sniper Tab ----------
 sniper_tab = tb.Frame(notebook)
@@ -403,7 +472,8 @@ btn_frame.pack(pady=5, fill="x")
 
 # Left group: Run + Remove (stacked vertically) with info buttons
 left_group = tb.Frame(btn_frame)
-left_group.pack(side="left", anchor="n")
+# align with status box which uses padx=20
+left_group.pack(side="left", anchor="n", padx=20)
 
 run_row = tb.Frame(left_group)
 run_row.pack(side="top", anchor="w")
@@ -568,7 +638,21 @@ update_button_states()
 settings_tab = tb.Frame(notebook)
 notebook.add(settings_tab, text="Settings")
 
-tb.Label(settings_tab, text="Settings", font=("Arial", 14, "bold")).pack(pady=10)
+title_row = tb.Frame(settings_tab)
+title_row.pack(fill="x", pady=8, padx=10)
+
+# Centered Settings title
+settings_title_label = tb.Label(title_row, text="Settings", font=("Arial", 14, "bold"), anchor="center", justify="center")
+settings_title_label.pack(side="left", expand=True, fill="x")
+
+# place Check for updates button on same row, aligned right
+tb.Button(
+    title_row,
+    text="Check for updates",
+    command=lambda: threading.Thread(target=lambda: _run_update_check(interactive=True), daemon=True).start(),
+    bootstyle=INFO,
+    width=18,
+).pack(side="right")
 
 # Explanatory text about settings
 settings_explain = (
@@ -702,6 +786,34 @@ tb.Button(button_frame, text="Reset to Defaults", command=reset_to_defaults, boo
 
 validation_error_label = tb.Label(settings_tab, text="", font=("Arial", 11))
 validation_error_label.pack(pady=5)
+
+
+def _run_update_check(interactive=False, test_latest=None):
+    """Run check_for_updates in background; if interactive=True show popup when newer."""
+    try:
+        if test_latest is not None:
+            latest = test_latest
+            check_error = None
+        else:
+            latest, check_error = check_for_updates()
+
+        if latest:
+            # if interactive show popup, otherwise only log
+            if interactive:
+                root.after(0, lambda: show_update_popup(latest))
+            else:
+                logger.update_log(f"🔄 Update available: {latest}")
+        else:
+            # give user feedback when they asked for an interactive check
+            if interactive:
+                if check_error == "missing_requests":
+                    root.after(0, lambda: show_info("Update Check", "Update check unavailable: 'requests' package not installed. Install with `pip install requests`."))
+                elif check_error is None:
+                    root.after(0, lambda: show_info("Update Check", "You're already up to date!"))
+                else:
+                    root.after(0, lambda: show_info("Update Check", "Update check failed. Please try again later."))
+    except Exception:
+        pass
 
 
 root.mainloop()

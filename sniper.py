@@ -173,8 +173,8 @@ def buy_sequence(t, full_region=None, stop_flag=None):
     try:
         if full_region is not None:
             # choose success/failure templates based on full_region size
-            base_succ = "buyout_successful_template.png"
-            base_fail = "buyout_failed_template.png"
+            base_succ = window_utils.resource_path("assets/buyout_successful_template.png")
+            base_fail = window_utils.resource_path("assets/buyout_failed_template.png")
             tpl_succ, cat_succ = vision_utils.choose_template(
                 base_succ,
                 region=full_region,

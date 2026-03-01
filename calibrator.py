@@ -109,8 +109,8 @@ def show_calibration_visual(target_pos, duration=5000, root=None):
         root.withdraw()
     
     try:
-        # Draw arrow on image
-        img_with_arrow = draw_arrow_on_image("auction_options_template.png", target_pos)
+        # Draw arrow on image (use assets folder)
+        img_with_arrow = draw_arrow_on_image("assets/auction_options_template.png", target_pos)
         if img_with_arrow is None:
             return
         
@@ -146,7 +146,7 @@ def get_calibration_image(target_pos):
     Returns: PIL Image resized to max 300px, or None on error.
     """
     try:
-        img_with_arrow = draw_arrow_on_image("auction_options_template.png", target_pos)
+        img_with_arrow = draw_arrow_on_image("assets/auction_options_template.png", target_pos)
         if img_with_arrow is None:
             return None
         
