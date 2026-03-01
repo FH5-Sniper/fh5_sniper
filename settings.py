@@ -1,7 +1,8 @@
 import json
 import os
+import window_utils
 
-CONFIG_FILE = "config.json"
+CONFIG_FILE = window_utils.get_config_file()
 
 # Validation limits
 MIN_INTERVAL = 0.1  # minimum delay between keystrokes

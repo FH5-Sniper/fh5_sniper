@@ -21,7 +21,7 @@ except Exception:
     HAVE_REQUESTS = False
 
 # application version (bump when releasing)
-__version__ = "1.0.0"
+__version__ = "1.0.2"
 
 # path to the static icon file (created once and checked into repo)
 _icon_file = window_utils.resource_path("assets/sniper.ico")
@@ -48,7 +48,7 @@ current_total_scans = 0
 DEFAULT_REGION = calibrator.load_region()
 
 # --- CONFIG SAVE ---
-CONFIG_FILE = "config.json"
+CONFIG_FILE = window_utils.get_config_file()
 
 
 # optional auto-update checker (stub)

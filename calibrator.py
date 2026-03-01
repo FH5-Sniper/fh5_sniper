@@ -5,7 +5,7 @@ import tkinter as tk
 from PIL import Image, ImageDraw, ImageTk
 import window_utils
 
-CONFIG_FILE = "config.json"
+CONFIG_FILE = window_utils.get_config_file()
 
 # Padding in pixels
 PADDING_LEFT = 20

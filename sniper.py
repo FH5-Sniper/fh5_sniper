@@ -11,7 +11,7 @@ import vision_utils
 pyautogui.FAILSAFE = False
 
 CONFIDENCE = 0.8
-CONFIG_FILE = "config.json"
+CONFIG_FILE = window_utils.get_config_file()
 
 # -------------------------
 # CONFIG HELPERS

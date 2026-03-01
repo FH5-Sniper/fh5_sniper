@@ -21,6 +21,32 @@ def resource_path(relative_path: str) -> str:
     return os.path.join(base, relative_path)
 
 
+def get_config_file() -> str:
+    """Return the full path to config.json in a user-writable location.
+    
+    On Windows, uses %APPDATA%/FH5Sniper/config.json so the app can write
+    configuration even when installed in Program Files. Creates the directory
+    if it doesn't exist.
+    """
+    try:
+        # Use APPDATA for user config (Windows standard)
+        app_data = os.environ.get('APPDATA')
+        if app_data:
+            config_dir = os.path.join(app_data, 'FH5Sniper')
+        else:
+            # Fallback to home directory
+            config_dir = os.path.expanduser('~/.fh5sniper')
+        
+        # Create directory if it doesn't exist
+        os.makedirs(config_dir, exist_ok=True)
+        
+        return os.path.join(config_dir, 'config.json')
+    except Exception as e:
+        # Final fallback: use current directory (development mode)
+        print(f"⚠️  Could not determine config directory: {e}, using local config.json")
+        return 'config.json'
+
+
 def get_fh5_window():
     """
     Retrieves the Forza Horizon 5 window object.
