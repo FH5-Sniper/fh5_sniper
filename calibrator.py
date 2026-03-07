@@ -1,6 +1,7 @@
 import pyautogui
 import time
 import json
+import os
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageTk
 import window_utils
@@ -240,8 +241,16 @@ def calibrate(status_label=None, image_callback=None, error_label=None):
     # Save to config
     cfg = {"AUCTION_OPTIONS_REGION": region}
     cfg.update(baseline)
+    try:
+        with open(CONFIG_FILE, "r") as f:
+            existing = json.load(f)
+        existing.update(cfg)
+        cfg = existing
+    except FileNotFoundError:
+        pass
+    
     with open(CONFIG_FILE, "w") as f:
-        json.dump(cfg, f)
+        json.dump(cfg, f, indent=2)
 
     print(f"✅ Saved region: AUCTION_OPTIONS_REGION = {region}")
 
@@ -321,6 +330,17 @@ def has_manual_region():
         return "AUCTION_OPTIONS_REGION" in data
     except Exception:
         return False
+
+
+def has_auto_region():
+    """Return True if an auto AUCTION_OPTIONS_REGION exists in config."""
+    try:
+        with open(CONFIG_FILE, "r") as f:
+            data = json.load(f)
+        return "AUTO_AUCTION_OPTIONS_REGION" in data
+    except Exception:
+        return False
+
 
 import tkinter as tk
 
@@ -430,6 +450,266 @@ def reset_region(status_label=None):
             0,
             lambda: status_label.config(
                 text="Manual calibration: NOT SET",
+                bootstyle="danger"
+            )
+        )
+
+
+def find_optimal_template_and_location(base_template):
+    """Find the optimal template and scale for the current screen configuration.
+    
+    Returns:
+        tuple: (template_path, scale, location) or None if not found
+    """
+    import vision_utils
+    
+    # Get window size for template selection
+    win = window_utils.get_fh5_window()
+    if win:
+        size_region = window_utils.get_window_region(win)
+    else:
+        # Fall back to full screen if window not found
+        import pyautogui
+        screen_w, screen_h = pyautogui.size()
+        size_region = (0, 0, screen_w, screen_h)
+    
+    # Choose the primary template based on window size
+    template_path, category = vision_utils.choose_template(base_template, region=size_region, debug=False)
+    
+    # Try the primary template first with scale detection
+    result = find_template_at_best_scale(template_path)
+    if result:
+        scale, location = result
+        return template_path, scale, location
+    
+    # If primary template fails, try other variants
+    candidates = []
+    
+    # Add other variants if they exist
+    med = base_template.replace(".png", "_med.png")
+    if os.path.isfile(window_utils.resource_path(med)):
+        candidates.append(med)
+    
+    candidates.append(base_template)  # full size
+    
+    small = base_template.replace(".png", "_small.png")
+    if os.path.isfile(window_utils.resource_path(small)):
+        candidates.append(small)
+    
+    # Remove the primary template if it's already in candidates
+    if template_path in candidates:
+        candidates.remove(template_path)
+    
+    # Try each candidate
+    for candidate in candidates:
+        candidate_path = window_utils.resource_path(candidate)
+        result = find_template_at_best_scale(candidate_path)
+        if result:
+            scale, location = result
+            return candidate_path, scale, location
+    
+    return None
+
+
+def find_template_at_best_scale(template_path):
+    """Find the best scale for a specific template.
+    
+    Returns:
+        tuple: (scale, location) or None if not found
+    """
+    import vision_utils
+    import cv2
+    import numpy as np
+    
+    try:
+        # Load template
+        template_color = cv2.imread(template_path, cv2.IMREAD_COLOR)
+        if template_color is None:
+            return None
+        
+        template_gray = cv2.cvtColor(template_color, cv2.COLOR_BGR2GRAY)
+        template_h, template_w = template_gray.shape[:2]
+        
+        # Take screenshot
+        import pyautogui
+        screenshot = pyautogui.screenshot()
+        screen_img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+        screen_gray = cv2.cvtColor(screen_img, cv2.COLOR_BGR2GRAY)
+        screen_h, screen_w = screen_gray.shape[:2]
+        
+        # Try different scales
+        scales_to_try = np.linspace(1.0, 0.4, 18)  # Start with full size, go down
+        
+        for scale in scales_to_try:
+            t_h = int(template_h * scale)
+            t_w = int(template_w * scale)
+            
+            if t_h <= 0 or t_w <= 0 or t_h > screen_h or t_w > screen_w:
+                continue
+            
+            resized = cv2.resize(template_gray, (t_w, t_h), interpolation=cv2.INTER_AREA)
+            
+            result = cv2.matchTemplate(screen_gray, resized, cv2.TM_CCOEFF_NORMED)
+            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+            
+            if max_val >= 0.8:  # Same confidence as used elsewhere
+                match_left = max_loc[0]
+                match_top = max_loc[1]
+                return scale, (match_left, match_top, t_w, t_h)
+    
+    except Exception as e:
+        print(f"Error in find_template_at_best_scale: {e}")
+    
+    return None
+
+
+def auto_calibrate(status_label=None):
+    """Auto calibrate: use image detection to find the auction options button once."""
+
+    def countdown(msg):
+       
+        for i in range(5, 0, -1):
+            text = f"{msg} ({i})"
+            print(text)
+            if status_label:
+                status_label.after(
+                    0,
+                    lambda: status_label.config(
+                        text=text,
+                        bootstyle="info"
+                    )
+                )
+            time.sleep(1)
+
+    
+    countdown("Make sure FH5 window is in focus, and AUCTION OPTIONS button is visible. Calibration starts in 5 seconds.")
+
+    try:
+        import vision_utils
+
+        status_label.after(
+            0,
+            lambda: status_label.config(
+                text="Calibrating... looking for Auction Options button on screen, this may take a moment.",
+                bootstyle="warning"
+            )
+        )
+        
+        # Use the same template path as the sniper
+        base_template = "assets/auction_options_template.png"
+        
+        # Try to find the button and get detailed info about which template worked
+        result = find_optimal_template_and_location(base_template)
+        
+        if result is None:
+            print("❌ Auto calibration failed: Could not find Auction Options button")
+            return False
+        
+        template_path, scale, location = result
+        left, top, width, height = location
+        
+        # Add some padding around the detected button (similar to manual calibration)
+        region = (
+            left - PADDING_LEFT,
+            top - PADDING_TOP,
+            width + PADDING_LEFT + PADDING_RIGHT,
+            height + PADDING_TOP + PADDING_BOTTOM
+        )
+        
+        # Record FH5 window size while we're at it
+        win = window_utils.get_fh5_window()
+        baseline = {}
+        if win:
+            baseline = {
+                "BASELINE_WINDOW_WIDTH": win.width,
+                "BASELINE_WINDOW_HEIGHT": win.height,
+            }
+        
+        # Save to config with auto prefix - include template and scale info
+        cfg = {
+            "AUTO_AUCTION_OPTIONS_REGION": region,
+            "AUTO_AUCTION_OPTIONS_TEMPLATE": template_path,
+            "AUTO_AUCTION_OPTIONS_SCALE": scale
+        }
+        cfg.update(baseline)
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                existing = json.load(f)
+            existing.update(cfg)
+            cfg = existing
+        except FileNotFoundError:
+            pass
+        
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(cfg, f, indent=2)
+        
+        print(f"✅ Auto calibration saved region: {region}, template: {template_path}, scale: {scale}")
+        return True
+            
+    except Exception as e:
+        print(f"❌ Auto calibration error: {e}")
+        if status_label:
+            status_label.after(
+                0,
+                lambda: status_label.config(
+                    text=f"Auto calibration: ERROR - {e}",
+                    bootstyle="danger"
+                )
+            )
+
+
+def load_auto_region():
+    """Return auto-calibrated region from config, or None if not set."""
+    try:
+        with open(CONFIG_FILE, "r") as f:
+            data = json.load(f)
+        return tuple(data["AUTO_AUCTION_OPTIONS_REGION"])
+    except Exception:
+        return None
+
+
+def load_auto_template_info():
+    """Return auto-calibrated template path and scale, or None if not set."""
+    try:
+        with open(CONFIG_FILE, "r") as f:
+            data = json.load(f)
+        # Try new keys first, then fall back to old keys for backward compatibility
+        template_path = data.get("AUTO_AUCTION_OPTIONS_TEMPLATE") or data.get("AUTO_TEMPLATE_PATH")
+        scale = data.get("AUTO_AUCTION_OPTIONS_SCALE") or data.get("AUTO_SCALE")
+        if template_path and scale is not None:
+            return template_path, scale
+    except Exception:
+        pass
+    return None
+
+
+def reset_auto_region(status_label=None):
+    """Reset AUTO_AUCTION_OPTIONS_REGION in config."""
+    try:
+        with open(CONFIG_FILE, "r") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        data = {}
+
+    # Clear all auto calibration data
+    keys_to_remove = [
+        "AUTO_AUCTION_OPTIONS_REGION",
+        "AUTO_AUCTION_OPTIONS_TEMPLATE",
+        "AUTO_AUCTION_OPTIONS_SCALE"
+    ]
+    
+    for key in keys_to_remove:
+        if key in data:
+            del data[key]
+
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+    if status_label:
+        status_label.after(
+            0,
+            lambda: status_label.config(
+                text="Auto calibration: NOT SET",
                 bootstyle="danger"
             )
         )

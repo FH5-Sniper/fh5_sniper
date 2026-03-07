@@ -22,6 +22,8 @@ DEFAULT_CONFIG = {
     "BASELINE_WINDOW_HEIGHT": 956,
     # whether to skip the popup warning about missing manual calibration
     "SKIP_CALIBRATION_WARNING": False,
+    # whether to skip the recalibration reminder on first sniper start
+    "SKIP_RECALIBRATION_REMINDER": False,
     # AUCTION_OPTIONS_REGION is optional (only set via manual calibration)
 }
 
@@ -167,6 +169,19 @@ def set_skip_calibration_warning(value: bool):
     """Persist the user's choice about the calibration popup."""
     config = load_config()
     config["SKIP_CALIBRATION_WARNING"] = bool(value)
+    save_config(config)
+
+
+def get_skip_recalibration_reminder():
+    """Return True if the user opted out of the recalibration reminder."""
+    config = load_config()
+    return config.get("SKIP_RECALIBRATION_REMINDER", False)
+
+
+def set_skip_recalibration_reminder(value: bool):
+    """Persist the user's choice about the recalibration reminder."""
+    config = load_config()
+    config["SKIP_RECALIBRATION_REMINDER"] = bool(value)
     save_config(config)
 
 

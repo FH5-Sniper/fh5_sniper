@@ -4,6 +4,7 @@ import json
 import logger
 import window_utils
 import vision_utils
+import calibrator
 
 # disable PyAutoGUI's built-in failsafe (moving mouse to corner raises
 # an exception) since we handle focus checks ourselves and the popup
@@ -96,40 +97,90 @@ def car_available(region):
         if bw and bh:
             baseline_window_size = (bw, bh)
 
+        # Check if we have calibrated data that allows us to skip variants
+        cfg = load_config()
+        manual_region = tuple(cfg["AUCTION_OPTIONS_REGION"]) if "AUCTION_OPTIONS_REGION" in cfg else None
+        auto_region = tuple(cfg["AUTO_AUCTION_OPTIONS_REGION"]) if "AUTO_AUCTION_OPTIONS_REGION" in cfg else None
+        auto_template_info = calibrator.load_auto_template_info()
+        
+        # Define base template path for reuse
         base_template = window_utils.resource_path("assets/auction_options_template.png")
-        template, size_cat = vision_utils.choose_template(
-            base_template,
-            region=size_region,
-            debug=False,
-        )
-        # determine numeric thresholds per category
-        if size_cat == "small":
-            base_min = 0.7
-            conf = 0.65
-        elif size_cat == "medium":
-            base_min = 0.5
-            conf = 0.70
+        
+        # If we have auto calibration with template info, use it directly
+        if auto_region and auto_template_info:
+            template_path, scale = auto_template_info
+            location = vision_utils.locate_on_screen_scaled(
+                template_path,
+                region=region,
+                confidence=CONFIDENCE,
+                grayscale=True,
+                scale_min=scale,
+                scale_max=scale,  # Use exact scale
+                scale_steps=1,     # Only try the one scale
+                debug=False,
+            )
+            return location is not None
+        # If we have manual calibration, determine the best template for the region
+        elif manual_region:
+            # Use the calibrated region to determine template size
+            template, size_cat = vision_utils.choose_template(
+                base_template,
+                region=manual_region,  # Use the calibrated region for template choice
+                debug=False,
+            )
+            # Use a narrow scale range based on the category
+            if size_cat == "small":
+                scale_min, scale_max = 0.7, 0.9
+            elif size_cat == "medium":
+                scale_min, scale_max = 0.5, 0.8
+            else:
+                scale_min, scale_max = 0.35, 0.6
+            
+            location = vision_utils.locate_on_screen_scaled(
+                template,
+                region=region,
+                confidence=CONFIDENCE,
+                grayscale=True,
+                scale_min=scale_min,
+                scale_max=scale_max,
+                scale_steps=8,  # Fewer steps for calibrated case
+                debug=False,
+            )
+            return location is not None
         else:
-            base_min = 0.35
-            conf = 0.72
-        # fixed range, nothing fancy
-        scale_min, scale_max = base_min, 1.0
+            # No calibration - use the full variants approach
+            template, size_cat = vision_utils.choose_template(
+                base_template,
+                region=size_region,
+                debug=False,
+            )
+            # determine numeric thresholds per category
+            if size_cat == "small":
+                base_min = 0.7
+                conf = 0.65
+            elif size_cat == "medium":
+                base_min = 0.5
+                conf = 0.70
+            else:
+                base_min = 0.35
+                conf = 0.72
+            # fixed range, nothing fancy
+            scale_min, scale_max = base_min, 1.0
 
-        # starting hint = middle of the permitted interval (caching may override)
-        scale_hint_val = (scale_min + scale_max) / 2
-        location = vision_utils.locate_on_screen_with_variants(
-            base_template,
-            region=region,
-            confidence=conf,
-            grayscale=True,
-            scale_min=scale_min,
-            scale_max=scale_max,
-            scale_hint=scale_hint_val,
-            hint_margin=0.12,
-            debug=False,
-        )
-       
-        return location is not None
+            # starting hint = middle of the permitted interval (caching may override)
+            scale_hint_val = (scale_min + scale_max) / 2
+            location = vision_utils.locate_on_screen_with_variants(
+                base_template,
+                region=region,
+                confidence=conf,
+                grayscale=True,
+                scale_min=scale_min,
+                scale_max=scale_max,
+                scale_hint=scale_hint_val,
+                hint_margin=0.12,
+                debug=False,
+            )
+            return location is not None
     except Exception as e:
         print(f"Error in car_available: {e}")
         return False
@@ -351,6 +402,7 @@ def sniper_loop(logger_callback, region, scans, timings, stop_flag, status_callb
         # prefer a manually-saved region from config if present
         cfg = load_config()
         manual_region = tuple(cfg["AUCTION_OPTIONS_REGION"]) if "AUCTION_OPTIONS_REGION" in cfg else None
+        auto_region = tuple(cfg["AUTO_AUCTION_OPTIONS_REGION"]) if "AUTO_AUCTION_OPTIONS_REGION" in cfg else None
 
         window = window_utils.get_fh5_window()
         if window:
@@ -365,6 +417,13 @@ def sniper_loop(logger_callback, region, scans, timings, stop_flag, status_callb
             if full_region is None:
                 full_region = manual_region
             logger_callback(f"✅ Using manual calibrated region: {manual_region}")
+        elif auto_region:
+            # If auto calibrated, use that region for detection
+            bottom_left_region = auto_region
+            # ensure buy-detection has a sensible full_region fallback
+            if full_region is None:
+                full_region = auto_region
+            logger_callback(f"✅ Using auto calibrated region: {auto_region}")
         elif full_region:
             bottom_left_region = window_utils.bottom_left_quarter(full_region)
             logger_callback(f"✅ Using FH5 window bounds: {full_region}, bottom-left quarter: {bottom_left_region}")

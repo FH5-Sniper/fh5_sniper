@@ -10,7 +10,6 @@ import logger
 from PIL import Image, ImageTk
 import window_utils
 import ctypes
-import os
 
 # optional requests availability (used for update checks)
 try:
@@ -21,7 +20,7 @@ except Exception:
     HAVE_REQUESTS = False
 
 # application version (bump when releasing)
-__version__ = "1.0.2"
+__version__ = "1.0.3"
 
 # path to the static icon file (created once and checked into repo)
 _icon_file = window_utils.resource_path("assets/sniper.ico")
@@ -105,6 +104,12 @@ def show_update_popup(latest_tag):
         popup.title("Update Available")
         popup.transient(root)
         popup.grab_set()
+        
+        # Set icon for popup
+        try:
+            popup.iconbitmap(_icon_file)
+        except Exception:
+            pass
 
         tb.Label(popup, text=f"New version available: {latest_tag}", font=("Arial", 12, "bold")).pack(padx=20, pady=(12,6))
         tb.Label(popup, text=f"Current version: {__version__}", font=("Arial", 10)).pack(padx=20, pady=(0,10))
@@ -136,7 +141,8 @@ try:
     root.iconbitmap(_icon_file)
 except Exception:
     pass
-root.geometry("930x650")
+root.geometry("930x680")
+root.maxsize(1400, 680)  # Max height of 680px, max width of 1400px
 
 # style tweaks for more modern appearance and better readability
 style = tb.Style()
@@ -157,6 +163,9 @@ def handle_exception(exc_type, exc_value, exc_traceback):
         pass
 
 sys.excepthook = handle_exception
+
+# Track if this is the first sniper start in this app session
+first_sniper_session_start = True
 
 # Top row: notebook on the left, quick actions (updates) on the right
 top_row = tb.Frame(root)
@@ -182,6 +191,64 @@ def update_timer():
             timer_label.config(text=f"⏱️  {minutes:02d}:{seconds:02d}")
         root.after(1000, update_timer)
 
+def show_recalibration_reminder():
+    """Display modal popup reminding user to recalibrate after restarting FH5.
+    
+    This popup appears only on the first sniper start of the app session.
+    """
+    popup = tk.Toplevel(root)
+    popup.title("Recalibration Recommended")
+    popup.transient(root)
+    popup.grab_set()
+    popup.resizable(False, False)
+    
+    # Set icon for popup
+    try:
+        popup.iconbitmap(_icon_file)
+    except Exception:
+        pass
+
+    title = tb.Label(popup, text="Recalibration Recommended", font=("Arial", 13, "bold"))
+    title.pack(padx=20, pady=(20, 10))
+
+    message = (
+        "If you have closed and reopened Forza Horizon 5 or started a new gaming session,\n"
+        "the window position or size may have changed.\n\n"
+        "For optimal detection performance, we recommend running calibration again.\n"
+        "This ensures the sniper can accurately locate the Auction Options button."
+    )
+    
+    tb.Label(popup, text=message, font=("Arial", 10), justify="center").pack(padx=20, pady=(0, 20))
+
+    dont_show_var = tk.BooleanVar()
+    tb.Checkbutton(popup, text="Don't show this reminder again", variable=dont_show_var).pack(pady=(0, 15))
+
+    button_frame = tb.Frame(popup)
+    button_frame.pack(pady=(0, 20))
+
+    def on_continue():
+        if dont_show_var.get():
+            settings.set_skip_recalibration_reminder(True)
+        popup.destroy()
+
+    def on_calibrate():
+        global sniper_running
+        sniper_running = False
+        if dont_show_var.get():
+            settings.set_skip_recalibration_reminder(True)
+        popup.destroy()
+        notebook.select(1)  # Switch to Calibration tab (index 1)
+
+    continue_button = tb.Button(button_frame, text="Continue Without Calibration", width=25, command=on_continue)
+    continue_button.pack(side="left", padx=5)
+
+    calibrate_button = tb.Button(button_frame, text="Calibrate Now", width=15, command=on_calibrate, bootstyle=PRIMARY)
+    calibrate_button.pack(side="left", padx=5)
+
+    popup.protocol("WM_DELETE_WINDOW", on_continue)
+    root.wait_window(popup)
+
+
 def show_calibration_warning():
     """Display modal popup reminding user to perform manual calibration.
 
@@ -189,46 +256,78 @@ def show_calibration_warning():
     checkbox is ticked, the preference is saved via settings.set_skip_calibration_warning.
     """
     popup = tk.Toplevel(root)
-    popup.title("Calibration Recommended")
+    popup.title("Calibration Required")
     popup.transient(root)
     popup.grab_set()
+    popup.resizable(False, False)
+    
+    # Set icon for popup
+    try:
+        popup.iconbitmap(_icon_file)
+    except Exception:
+        pass
 
-    tb.Label(popup, text="Manual calibration has not been performed.", font=("Arial", 12)).pack(padx=20, pady=(20, 5))
-    tb.Label(
-    popup,
-    text="For faster scans, we recommend running Manual Calibration",
-    font=("Arial", 10)
-    ).pack(padx=20)
+    title = tb.Label(popup, text="No Calibration Detected", font=("Arial", 13, "bold"))
+    title.pack(padx=20, pady=(20, 10))
 
+    tb.Label(popup, text="Calibration has not been performed.", font=("Arial", 11)).pack(padx=20, pady=(0, 8))
     tb.Label(
         popup,
-        text="in the Calibration tab before starting the sniper.",
-        font=("Arial", 10)
+        text="For faster and more accurate scans, we recommend running either\nauto or manual calibration before starting the sniper.",
+        font=("Arial", 10),
+        justify="center"
     ).pack(padx=20, pady=(0, 15))
 
     dont_show_var = tk.BooleanVar()
-    tb.Checkbutton(popup, text="Don't show again", variable=dont_show_var).pack(pady=(0, 15))
+    tb.Checkbutton(popup, text="Don't show this warning again", variable=dont_show_var).pack(pady=(0, 15))
 
-    def on_close():
+    def on_continue():
         if dont_show_var.get():
             settings.set_skip_calibration_warning(True)
         popup.destroy()
 
-    ok_button = tb.Button(popup, text="Continue", width=10, command=on_close)
-    ok_button.pack(pady=(0, 20))
+    def on_calibrate_cancel():
+        # Stop sniper and switch to calibration tab
+        global sniper_running
+        sniper_running = False
+        if dont_show_var.get():
+            settings.set_skip_calibration_warning(True)
+        popup.destroy()
+        notebook.select(1)  # Switch to Calibration tab (index 1)
 
-    popup.protocol("WM_DELETE_WINDOW", on_close)
+    button_frame = tb.Frame(popup)
+    button_frame.pack(pady=(0, 20))
+
+    continue_button = tb.Button(button_frame, text="Continue Without Calibration", width=25, command=on_continue)
+    continue_button.pack(side="left", padx=5)
+
+    calibrate_button = tb.Button(button_frame, text="Cancel & Calibrate", width=15, command=on_calibrate_cancel, bootstyle=DANGER)
+    calibrate_button.pack(side="left", padx=5)
+
+    popup.protocol("WM_DELETE_WINDOW", on_continue)
     root.wait_window(popup)
 
 
 def start_sniper_ui():
-    global sniper_running, stop_flag, timer_running, timer_elapsed, buy_attempts, buy_successes, buy_failures
+    global sniper_running, stop_flag, timer_running, timer_elapsed, buy_attempts, buy_successes, buy_failures, first_sniper_session_start
     if sniper_running:
         logger.update_log("⚠️ Sniper already running!")
         return
+    
+    # Show recalibration reminder on first sniper start of this session
+    if first_sniper_session_start and not settings.get_skip_recalibration_reminder():
+        first_sniper_session_start = False
+        show_recalibration_reminder()
+        # Check if user clicked "Calibrate Now" which sets sniper_running to False
+        if not sniper_running:
+            return
+    
     # warn the user if calibration hasn't been done and they haven't opted out
-    if not calibrator.has_manual_region() and not settings.get_skip_calibration_warning():
+    if not calibrator.has_manual_region() and not calibrator.has_auto_region() and not settings.get_skip_calibration_warning():
         show_calibration_warning()
+        # If user clicked Cancel & Calibrate, sniper_running is False, so return
+        if not sniper_running:
+            return
 
     sniper_running = True
     timer_running = False
@@ -405,13 +504,13 @@ calibration_instructions = (
     "During calibration:\n"
     "1. Move your mouse over the top-left corner of the 'Auction Options' button.\n"
     "2. Then, move your mouse over the bottom-right corner of the button.\n\n"
-    "The tool will automatically capture these points and calculate the region."
 )
 
 # brief explanation about calibration vs automatic detection
 calib_explain = (
-    "Manual calibration allows the sniper to focus on a tight region, making each scan much faster.\n\n"
-    "If no manual calibration exists, the app will fall back to the built-in detection logic which scans wider areas and takes slightly longer per attempt.\n"
+    "Calibration allows the sniper to focus on a smaller region, making each scan much faster.\n"
+    "Auto calibration is the fastest option.\n"
+    "If no calibration exists, the app falls back to the built-in detection logic, which scans wider areas and takes slightly longer per attempt.\n"
 )
 
 calib_explain_label = tb.Label(
@@ -433,6 +532,12 @@ def show_info(title, message, image_path=None):
     info.title(title)
     info.resizable(False, False)
     info.attributes("-topmost", True)
+    
+    # Set icon for popup
+    try:
+        info.iconbitmap(_icon_file)
+    except Exception:
+        pass
 
     # message text
     lbl = tb.Label(info, text=message, wraplength=380, justify=LEFT)
@@ -466,16 +571,107 @@ def run_calibration():
     root.after(0, update_button_states)
     root.after(0, lambda: logger.update_log("✅ Manual calibration complete"))
 
+def run_auto_calibration():
+    region_test_label.config(text="")
+    success = calibrator.auto_calibrate(status_label=status_label)
+
+    # update UI in main thread
+    if success:
+        root.after(0, update_status_label)
+        root.after(0, lambda: logger.update_log("✅ Auto calibration complete"))
+    else:
+        # Show error message and keep it visible
+        status_label.after(0, lambda: status_label.config(
+            text="Manual calibration: NOT SET\nAuto calibration: FAILED\nCalibration failed, try resizing the Forza Horizon 5 window to be either bigger or smaller to make sure the Auction Options button is detected.",
+            bootstyle="danger"
+        ))
+        root.after(0, lambda: logger.update_log("❌ Auto calibration failed"))
+    
+    root.after(0, update_button_states)
+
 # horizontal button frame
 btn_frame = tb.Frame(calib_tab)
 btn_frame.pack(pady=5, fill="x")
 
-# Left group: Run + Remove (stacked vertically) with info buttons
+# Left group: Run Auto + Remove Auto (stacked vertically) with info buttons
 left_group = tb.Frame(btn_frame)
 # align with status box which uses padx=20
 left_group.pack(side="left", anchor="n", padx=20)
 
-run_row = tb.Frame(left_group)
+auto_run_row = tb.Frame(left_group)
+auto_run_row.pack(side="top", anchor="w")
+auto_run_btn = tb.Button(auto_run_row, text="Run Auto Calibration", bootstyle=PRIMARY, width=22,
+          command=lambda: threading.Thread(target=run_auto_calibration, daemon=True).start())
+auto_run_btn.pack(side="left", padx=(5))
+auto_info_run = tb.Button(auto_run_row, text="?", width=2, bootstyle="info-outline",
+                     command=lambda: show_info(
+                         "Auto Calibration",
+                         "Auto calibration uses image recognition to automatically find the Auction Options button.\n\n"
+                         "Make sure Forza Horizon 5 is running in windowed mode and the Auction Options button is visible.\n"
+                         "The detection may take a few seconds. If it fails, try resizing the Forza Horizon 5 window.",
+                         image_path="assets/auction_options_template.png"
+                     ))
+auto_info_run.pack(side="left")
+
+def test_region():
+    # mimic sniper_loop's region priority: manual > auto > default
+    config_region = calibrator.load_region()
+    manual_region = calibrator.load_region() if calibrator.has_manual_region() else None
+    auto_region = calibrator.load_auto_region() if calibrator.has_auto_region() else None
+    
+    window = window_utils.get_fh5_window()
+    if window:
+        full = window_utils.get_window_region(window)
+        default_reg = window_utils.bottom_left_quarter(full)
+    else:
+        default_reg = window_utils.bottom_left_quarter(config_region)
+    
+    # Use the same priority as sniper_loop
+    if manual_region:
+        test_reg = manual_region
+        region_type = "manual calibrated"
+    elif auto_region:
+        test_reg = auto_region
+        region_type = "auto calibrated"
+    else:
+        test_reg = default_reg
+        region_type = "default (bottom-left quarter)"
+
+    try:
+        found = sniper.car_available(test_reg)
+        if found:
+            region_test_label.config(text=f"Test Region Result: ✅ Button detected in {region_type} region", bootstyle="success")
+        else:
+            region_test_label.config(text=f"Test Region Result: ❌ Button NOT detected in {region_type} region", bootstyle="danger")
+
+    except Exception as e:
+        region_test_label.config(text=f"❌ Error testing region: {e}", bootstyle="danger")
+
+def reset_auto_region_ui():
+    region_test_label.config(text="")
+    calibrator.reset_auto_region(status_label=status_label)
+    update_status_label()
+    update_button_states()
+    logger.update_log("🔄 Auto region removed.")
+
+auto_remove_row = tb.Frame(left_group)
+auto_remove_row.pack(side="top", pady=4, anchor="w")
+auto_reset_btn = tb.Button(auto_remove_row, text="Remove Auto Region",
+    bootstyle=DANGER,
+    command=reset_auto_region_ui,
+    width=22)
+auto_reset_btn.pack(side="left", padx=(5))
+auto_info_remove = tb.Button(auto_remove_row, text="?", width=2, bootstyle="info-outline",
+                         command=lambda: show_info("Remove Auto Region", 
+"Clears any auto-calibrated region. "
+"The sniper will revert to automatic detection which searches the entire window area."))
+auto_info_remove.pack(side="left")
+
+# Right group: Manual calibration + Test + Show overlay (stacked vertically)
+right_group = tb.Frame(btn_frame)
+right_group.pack(side="left", anchor="n", padx=20)
+
+run_row = tb.Frame(right_group)
 run_row.pack(side="top", anchor="w")
 run_btn = tb.Button(run_row, text="Run Manual Calibration", bootstyle=SUCCESS, width=22,
           command=lambda: threading.Thread(target=run_calibration, daemon=True).start())
@@ -489,63 +685,6 @@ info_run = tb.Button(run_row, text="?", width=2, bootstyle="info-outline",
                      ))
 info_run.pack(side="left")
 
-def test_region():
-    # mimic sniper_loop's one-time region calculation
-    config_region = calibrator.load_region()
-    window = window_utils.get_fh5_window()
-    if window:
-        full = window_utils.get_window_region(window)
-        test_reg = window_utils.bottom_left_quarter(full)
-    else:
-        test_reg = window_utils.bottom_left_quarter(config_region)
-
-    try:
-        found = sniper.car_available(test_reg)
-        if found:
-            region_test_label.config(text="Test Region Result: ✅ Button detected in region", bootstyle="success")
-        else:
-            region_test_label.config(text="Test Region Result: ❌ Button NOT detected in region", bootstyle="danger")
-
-    except Exception as e:
-        region_test_label.config(text=f"❌ Error testing region: {e}", bootstyle="danger")
-
-# Right group: Test + Show overlay (stacked vertically)
-right_group = tb.Frame(btn_frame)
-right_group.pack(side="left", anchor="n", padx=20)
-
-# row for Test Region
-test_row = tb.Frame(right_group)
-test_row.pack(side="top", anchor="w", pady=2)
-test_btn = tb.Button(test_row, text="Test Region", command=test_region,
-                     bootstyle=INFO, width=20)
-test_btn.pack(side="left", padx=(5,0))
-info_test = tb.Button(test_row, text="?", width=2, bootstyle="info-outline",
-                      command=lambda: show_info("Test/Overlay Info", 
-"Test Region checks the current detection region for the Auction Options button. "
-"Make sure that you are in the auction house with cars available to buy when you run this test. "
-"This requires a manual calibration region to be set."))
-info_test.pack(side="left", padx=(0,15))
-
-# row for Show Overlay
-show_row = tb.Frame(right_group)
-show_row.pack(side="top", anchor="w", pady=2)
-show_btn = tb.Button(show_row, text="Show Region Overlay",
-          command=lambda: calibrator.show_region_overlay(
-              region=calibrator.load_region(),
-              duration=5000,
-              root=root
-          ),
-          bootstyle=INFO,
-          width=20)
-show_btn.pack(side="left", padx=(5,0))
-info_show = tb.Button(show_row, text="?", width=2, bootstyle="info-outline",
-                      command=lambda: show_info("Show Region Overlay Info", 
-"Show Region Overlay draws the calibrated region on screen so you can verify it covers the Auction Options button. "
-"This requires a manual calibration region to be set."))
-info_show.pack(side="left", padx=(0,15))
-info_show.pack(side="left", padx=(0,15))
-
-
 def reset_region_ui():
     region_test_label.config(text="")
     calibrator.reset_region(status_label=status_label)
@@ -553,7 +692,7 @@ def reset_region_ui():
     update_button_states()
     logger.update_log("🔄 Region removed. Run calibration again if needed.")
 
-remove_row = tb.Frame(left_group)
+remove_row = tb.Frame(right_group)
 remove_row.pack(side="top", pady=4, anchor="w")
 reset_btn = tb.Button(remove_row, text="Remove Manual Region",
     bootstyle=DANGER,
@@ -573,8 +712,9 @@ status_box.pack(fill="x", padx=20, pady=(10,12))
 
 status_label = tb.Label(
     status_box,
-    text="Manual calibration: not set",
-    font=("Arial", 12)
+    text="Manual calibration: not set\nAuto calibration: not set",
+    font=("Arial", 12),
+    wraplength=850
 )
 status_label.pack(anchor="w")
 
@@ -584,6 +724,47 @@ calib_image_label.pack(anchor="w", pady=(8,8))
 
 region_test_label = tb.Label(status_box, text="", font=("Arial", 12, "italic"), wraplength=850)
 region_test_label.pack(anchor="w", pady=(4,0))
+
+# Test and Show overlay buttons under the status box
+test_overlay_frame = tb.Frame(calib_tab)
+test_overlay_frame.pack(pady=(5, 10), fill="x")
+
+# Left side: Test Region
+test_left = tb.Frame(test_overlay_frame)
+test_left.pack(side="left", padx=20)
+
+test_row = tb.Frame(test_left)
+test_row.pack(side="top", anchor="w")
+test_btn = tb.Button(test_row, text="Test Region", command=test_region,
+                     bootstyle=INFO, width=20)
+test_btn.pack(side="left", padx=(5,0))
+info_test = tb.Button(test_row, text="?", width=2, bootstyle="info-outline",
+                      command=lambda: show_info("Test Region Info", 
+"Test Region checks the current detection region for the Auction Options button. "
+"Make sure that you are in the auction house with Auction Options button visible when you run this test."))
+info_test.pack(side="left", padx=(0,15))
+
+# Right side: Show Region Overlay
+test_right = tb.Frame(test_overlay_frame)
+test_right.pack(side="left", padx=20)
+
+show_row = tb.Frame(test_right)
+show_row.pack(side="top", anchor="w")
+show_btn = tb.Button(show_row, text="Show Region Overlay",
+          command=lambda: calibrator.show_region_overlay(
+              region=(calibrator.load_region() if calibrator.has_manual_region() else 
+                     calibrator.load_auto_region() if calibrator.has_auto_region() else 
+                     calibrator.load_region()),
+              duration=5000,
+              root=root
+          ),
+          bootstyle=INFO,
+          width=20)
+show_btn.pack(side="left", padx=(5,0))
+info_show = tb.Button(show_row, text="?", width=2, bootstyle="info-outline",
+                      command=lambda: show_info("Show Region Overlay Info", 
+"Show Region Overlay draws the calibrated region on screen so you can verify it covers the Auction Options button."))
+info_show.pack(side="left", padx=(0,15))
 
 # Callback to update calibration image display
 def update_calibration_image(pil_image):
@@ -602,37 +783,51 @@ def update_calibration_image(pil_image):
 
 def update_status_label():
     try:
-        if calibrator.has_manual_region():
-            status_label.config(
-                text="Manual calibration: SET",
-                bootstyle="success"
-            )
+        manual_status = "SET" if calibrator.has_manual_region() else "NOT SET"
+        has_any_calibration = calibrator.has_manual_region() or calibrator.has_auto_region()
+        
+        if calibrator.has_auto_region():
+            auto_status = "SET"
+        elif has_any_calibration:
+            auto_status = "NOT SET"
         else:
-            status_label.config(
-                text="Manual calibration: NOT SET",
-                bootstyle="danger"
-            )
+            auto_status = "NOT SET\nTry resizing the Forza Horizon 5 window to be bigger or smaller to ensure the Auction Options button is detected."
+        
+        status_label.config(
+            text=f"Manual calibration: {manual_status}\nAuto calibration: {auto_status}",
+            bootstyle="success" if has_any_calibration else "danger"
+        )
     except Exception:
         status_label.config(
-            text="Manual calibration: unknown",
+            text="Manual calibration: unknown\nAuto calibration: unknown",
             bootstyle="warning"
         )
 
 # control state helper
 def update_button_states():
-    has = calibrator.has_manual_region()
-    if has:
+    has_manual = calibrator.has_manual_region()
+    has_auto = calibrator.has_auto_region()
+    has_any = has_manual or has_auto
+    
+    # Manual calibration buttons
+    if has_manual:
         reset_btn.config(state=NORMAL)
+    else:
+        reset_btn.config(state=DISABLED)
+    
+    # Test and Show buttons work with any calibration
+    if has_any:
         show_btn.config(state=NORMAL)
         test_btn.config(state=NORMAL)
     else:
-        reset_btn.config(state=DISABLED)
         show_btn.config(state=DISABLED)
         test_btn.config(state=DISABLED)
-
-# Initialize status label
-update_status_label()
-update_button_states()
+    
+    # Auto calibration buttons
+    if has_auto:
+        auto_reset_btn.config(state=NORMAL)
+    else:
+        auto_reset_btn.config(state=DISABLED)
 
 # ---------- Settings Tab ----------
 settings_tab = tb.Frame(notebook)
@@ -644,15 +839,6 @@ title_row.pack(fill="x", pady=8, padx=10)
 # Centered Settings title
 settings_title_label = tb.Label(title_row, text="Settings", font=("Arial", 14, "bold"), anchor="center", justify="center")
 settings_title_label.pack(side="left", expand=True, fill="x")
-
-# place Check for updates button on same row, aligned right
-tb.Button(
-    title_row,
-    text="Check for updates",
-    command=lambda: threading.Thread(target=lambda: _run_update_check(interactive=True), daemon=True).start(),
-    bootstyle=INFO,
-    width=18,
-).pack(side="right")
 
 # Explanatory text about settings
 settings_explain = (
@@ -787,6 +973,16 @@ tb.Button(button_frame, text="Reset to Defaults", command=reset_to_defaults, boo
 validation_error_label = tb.Label(settings_tab, text="", font=("Arial", 11))
 validation_error_label.pack(pady=5)
 
+bottom_row = tb.Frame(settings_tab)
+bottom_row.pack(fill="x", pady=8, padx=10)
+
+tb.Button(
+    bottom_row,
+    text="Check for updates",
+    command=lambda: threading.Thread(target=lambda: _run_update_check(interactive=True), daemon=True).start(),
+    bootstyle=INFO,
+    width=18,
+).pack(side="right")
 
 def _run_update_check(interactive=False, test_latest=None):
     """Run check_for_updates in background; if interactive=True show popup when newer."""
@@ -815,5 +1011,8 @@ def _run_update_check(interactive=False, test_latest=None):
     except Exception:
         pass
 
+# update status and button states on startup
+update_status_label()
+update_button_states()
 
 root.mainloop()
