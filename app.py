@@ -23,7 +23,7 @@ except Exception:
     HAVE_REQUESTS = False
 
 # application version
-__version__ = "1.0.5"
+__version__ = "1.0.6"
 
 # path to the static icon file (created once and checked into repo)
 _icon_file = window_utils.resource_path("assets/sniper.ico")
@@ -243,7 +243,7 @@ def show_recalibration_reminder():
         popup.destroy()
         notebook.select(1)  # Switch to Calibration tab (index 1)
 
-    continue_button = tb.Button(button_frame, text="Continue Without Calibration", width=25, command=on_continue)
+    continue_button = tb.Button(button_frame, text="Continue Without Calibrating", width=25, command=on_continue)
     continue_button.pack(side="left", padx=5)
 
     calibrate_button = tb.Button(button_frame, text="Calibrate Now", width=15, command=on_calibrate, bootstyle=PRIMARY)
@@ -626,7 +626,11 @@ auto_info_run = tb.Button(auto_run_row, text="?", width=2, bootstyle="info-outli
 auto_info_run.pack(side="left")
 
 def test_region_with_retry():
-    """Test region with multiple template sizes. Called after calibration."""
+    """Test region right after calibration using the same logic as the sniper/Test Region button.
+
+    This avoids cases where the post-calibration auto test reports a failure
+    even though the normal Test Region / sniper detection works fine.
+    """
     config_region = calibrator.load_region()
     manual_region = calibrator.load_region() if calibrator.has_manual_region() else None
     auto_region = calibrator.load_auto_region() if calibrator.has_auto_region() else None
@@ -650,54 +654,30 @@ def test_region_with_retry():
         region_type = "default (bottom-left quarter)"
 
     try:
-        region_test_label.config(text="Testing calibration region (this may take a moment)...", bootstyle="info")
+        region_test_label.config(
+            text="Testing calibration region (this may take a moment)...",
+            bootstyle="info",
+        )
         root.update_idletasks()  # Force UI update to show the testing message
-        logger.update_log("🔍 Testing calibration with all templates...")
-        
-        # Use the base template with multiple scales and confidences like auto calibration
-        template_path = window_utils.resource_path("assets/auction_options_template.png")
-        scales = [0.8, 0.9, 1.0, 1.1, 1.2]
-        confidences = [0.65, 0.68, 0.7, 0.72]
-        
-        found_params = None
-        
-        for scale in scales:
-            for confidence in confidences:
-                print(f"[TEST] Trying scale={scale}, confidence={confidence}")
-                
-                try:
-                    location = vision_utils.locate_on_screen_with_variants(
-                        template_path, region=test_reg, confidence=confidence, scale_min=scale, scale_max=scale, scale_steps=1
-                    )
-                    
-                    if location is not None:
-                        found_params = (scale, confidence)
-                        region_test_label.config(
-                            text=f"✅ Calibration successful! Button detected (scale={scale}, conf={confidence})",
-                            bootstyle="success"
-                        )
-                        logger.update_log(f"✅ Button found with scale={scale}, confidence={confidence}")
-                        
-                        # Save the successful parameters to config for manual calibration
-                        config = settings.load_config()
-                        config["MANUAL_TEMPLATE_INFO"] = {
-                            "template_path": template_path,
-                            "scale": scale,
-                            "confidence": confidence
-                        }
-                        settings.save_config(config)
-                        
-                        return
-                except Exception as e:
-                    print(f"[ERROR] Exception testing scale={scale}, conf={confidence}: {e}")
-                    continue
-        
-        # If we get here, no template worked - show simple error message
+        logger.update_log("🔍 Testing calibration using sniper detection...")
+
+        # Re-use the same detection logic the sniper loop and Test Region button use
+        found = sniper.car_available(test_reg, test=True)
+
+        if found:
+            region_test_label.config(
+                text=f"✅ Calibration successful! Button detected in {region_type} region",
+                bootstyle="success",
+            )
+            logger.update_log(f"✅ Button detected in {region_type} region after calibration")
+            return
+
+        # If we get here, detection failed – show simple error message
         region_test_label.config(
             text="❌ Button not detected. Please run calibration again.",
-            bootstyle="danger"
+            bootstyle="danger",
         )
-        logger.update_log("⚠️ Calibration test failed - trying all templates")
+        logger.update_log("⚠️ Calibration test failed using sniper detection")
         
         # Show prompt to retry calibration
         retry_popup = tk.Toplevel(root)
@@ -868,7 +848,7 @@ test_right.pack(side="left", padx=20)
 
 show_row = tb.Frame(test_right)
 show_row.pack(side="top", anchor="w")
-show_btn = tb.Button(show_row, text="Show Region Overlay",
+show_btn = tb.Button(show_row, text="Show Manual Region Overlay",
           command=lambda: calibrator.show_region_overlay(
               region=(calibrator.load_region() if calibrator.has_manual_region() else 
                      calibrator.load_auto_region() if calibrator.has_auto_region() else 
@@ -877,7 +857,7 @@ show_btn = tb.Button(show_row, text="Show Region Overlay",
               root=root
           ),
           bootstyle=INFO,
-          width=20)
+          width=30)
 show_btn.pack(side="left", padx=(5,0))
 info_show = tb.Button(show_row, text="?", width=2, bootstyle="info-outline",
                       command=lambda: show_info("Show Region Overlay Info", 

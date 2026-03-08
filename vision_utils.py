@@ -15,6 +15,10 @@ from typing import Optional, Tuple
 import cv2
 import numpy as np
 import pyautogui
+import json
+import window_utils
+
+CONFIG_FILE = window_utils.get_config_file()
 
 import window_utils  # for window size queries
 
@@ -97,8 +101,7 @@ def choose_template(base_path: str, region: Optional[Tuple[int, int, int, int]] 
         print(f"template selection: chose {category} -> {chosen}")
     # return category string for downstream logic
     return chosen, category
-
-
+    
 def compute_scale_bounds(
     template_path: str,
     region: Optional[Tuple[int, int, int, int]] = None,
@@ -114,6 +117,25 @@ def compute_scale_bounds(
     region or window size – those have proved unreliable in practice.
     """
     return fallback_min, fallback_max
+
+def save_manual_template_match(template_path, scale, confidence):
+    try:
+        with open(CONFIG_FILE, "r") as f:
+            data = json.load(f)
+
+        data["MANUAL_TEMPLATE_INFO"] = {
+            "template_path": template_path,
+            "scale": scale,
+            "confidence": confidence
+        }
+
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+
+        print("✅ Updated MANUAL_TEMPLATE_INFO in config.json")
+
+    except Exception as e:
+        print(f"⚠️ Failed writing config: {e}")
 
 
 def _load_template(image_path: str, debug: bool = False):
@@ -154,6 +176,7 @@ def locate_on_screen_with_variants(
     debug: bool = False,
     scale_hint: Optional[float] = None,
     hint_margin: float = 0.10,
+    test: bool = False,
 ) -> Optional[Tuple[int, int, int, int]]:
     """Attempt to locate a template and its size variants.
 
@@ -205,6 +228,7 @@ def locate_on_screen_with_variants(
             debug=debug,
             scale_hint=hint,
             hint_margin=hint_margin,
+            test=test,
         )
         if loc is not None:
             return loc
@@ -222,6 +246,7 @@ def locate_on_screen_scaled(
     debug: bool = False,
     scale_hint: Optional[float] = None,
     hint_margin: float = 0.10,
+    test: bool = False,
 ) -> Optional[Tuple[int, int, int, int]]:
     """Search the screen or region for a template at multiple scales.
 
@@ -309,6 +334,10 @@ def locate_on_screen_scaled(
             # remember this scale for next time
             _last_scale_hint[image_path] = scale
             # match found - compute screen coords
+
+            if test:
+                save_manual_template_match(image_path, scale, confidence)
+            
             match_left = left + max_loc[0]
             match_top = top + max_loc[1]
             # width/height should be size of resized template

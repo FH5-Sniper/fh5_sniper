@@ -562,7 +562,9 @@ def find_template_at_best_scale(template_path):
             result = cv2.matchTemplate(screen_gray, resized, cv2.TM_CCOEFF_NORMED)
             min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
             
-            if max_val >= 0.8:  # Same confidence as used elsewhere
+            # Use a threshold in line with the rest of the app's detectors
+            # (typically ~0.65–0.72 rather than 0.8, which is too strict here).
+            if max_val >= 0.7:
                 match_left = max_loc[0]
                 match_top = max_loc[1]
                 return scale, (match_left, match_top, t_w, t_h)
