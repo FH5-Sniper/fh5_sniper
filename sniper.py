@@ -113,6 +113,7 @@ def car_available(region):
         manual_region = tuple(cfg["AUCTION_OPTIONS_REGION"]) if "AUCTION_OPTIONS_REGION" in cfg else None
         auto_region = tuple(cfg["AUTO_AUCTION_OPTIONS_REGION"]) if "AUTO_AUCTION_OPTIONS_REGION" in cfg else None
         auto_template_info = calibrator.load_auto_template_info()
+        manual_template_info = cfg.get("MANUAL_TEMPLATE_INFO")
         
         # Define base template path for reuse
         base_template = window_utils.resource_path("assets/auction_options_template.png")
@@ -131,33 +132,41 @@ def car_available(region):
                 debug=False,
             )
             return location is not None
-        # If we have manual calibration, determine the best template for the region
-        elif manual_region:
-            # Use the calibrated region to determine template size
-            template, size_cat = vision_utils.choose_template(
-                base_template,
-                region=manual_region,  # Use the calibrated region for template choice
-                debug=False,
-            )
-            # Use a narrow scale range based on the category
-            if size_cat == "small":
-                scale_min, scale_max = 0.7, 0.9
-            elif size_cat == "medium":
-                scale_min, scale_max = 0.5, 0.8
-            else:
-                scale_min, scale_max = 0.35, 0.6
-            
-            location = vision_utils.locate_on_screen_scaled(
-                template,
-                region=region,
-                confidence=CONFIDENCE,
-                grayscale=True,
-                scale_min=scale_min,
-                scale_max=scale_max,
-                scale_steps=8,  # Fewer steps for calibrated case
-                debug=False,
+        # If we have manual calibration with saved template info, use it directly
+        elif manual_region and manual_template_info:
+            template_path = manual_template_info["template_path"]
+            scale = manual_template_info["scale"]
+            confidence = manual_template_info["confidence"]
+            location = vision_utils.locate_on_screen_with_variants(
+                template_path, region=region, confidence=confidence, scale_min=scale, scale_max=scale, scale_steps=1
             )
             return location is not None
+        # If we have manual calibration but no saved info, use the detection loop
+        elif manual_region:
+            # Use the base template with multiple scales and confidences
+            template_path = window_utils.resource_path("assets/auction_options_template.png")
+            scales = [0.8, 0.9, 1.0, 1.1, 1.2]
+            confidences = [0.65, 0.68, 0.7, 0.72]
+            for scale in scales:
+                for confidence in confidences:
+                    location = vision_utils.locate_on_screen_with_variants(
+                        template_path, region=region, confidence=confidence, scale_min=scale, scale_max=scale, scale_steps=1
+                    )
+                    if location:
+                        return True
+            return False
+            # Use the base template with multiple scales and confidences like auto calibration
+            template_path = window_utils.resource_path("assets/auction_options_template.png")
+            scales = [0.8, 0.9, 1.0, 1.1, 1.2]
+            confidences = [0.65, 0.68, 0.7, 0.72]
+            for scale in scales:
+                for confidence in confidences:
+                    location = vision_utils.locate_on_screen_with_variants(
+                        region, template_path, confidence=confidence, scale=scale
+                    )
+                    if location:
+                        return True
+            return False
         else:
             # No calibration - use the full variants approach
             template, size_cat = vision_utils.choose_template(

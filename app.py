@@ -2,11 +2,13 @@ import ttkbootstrap as tb
 from ttkbootstrap.constants import *
 from tkinter import scrolledtext
 import tkinter as tk
+
 import threading
 import calibrator
 import sniper
 import settings
 import logger
+import vision_utils
 from PIL import Image, ImageTk
 import window_utils
 import ctypes
@@ -21,7 +23,7 @@ except Exception:
     HAVE_REQUESTS = False
 
 # application version
-__version__ = "1.0.4"
+__version__ = "1.0.5"
 
 # path to the static icon file (created once and checked into repo)
 _icon_file = window_utils.resource_path("assets/sniper.ico")
@@ -143,8 +145,8 @@ try:
     root.iconbitmap(_icon_file)
 except Exception:
     pass
-root.geometry("930x680")
-root.maxsize(1400, 680)  # Max height of 680px, max width of 1400px
+root.geometry("930x740")
+root.maxsize(1400, 740)  # Max height of 740px, max width of 1400px
 
 # style tweaks for more modern appearance and better readability
 style = tb.Style()
@@ -284,8 +286,7 @@ def show_calibration_warning():
     tb.Checkbutton(popup, text="Don't show this warning again", variable=dont_show_var).pack(pady=(0, 15))
 
     def on_continue():
-        if dont_show_var.get():
-            settings.set_skip_calibration_warning(True)
+        settings.set_skip_calibration_warning(True)  # Always skip after continuing
         popup.destroy()
 
     def on_calibrate_cancel():
@@ -572,6 +573,8 @@ def run_calibration():
     # Check if calibration was successful
     if calibrator.has_manual_region():
         calibration_done_this_session = True
+        # Automatically test region after calibration
+        root.after(0, lambda: test_region_with_retry())
 
     # update UI in main thread
     root.after(0, update_status_label)
@@ -621,6 +624,112 @@ auto_info_run = tb.Button(auto_run_row, text="?", width=2, bootstyle="info-outli
                          image_path="assets/auction_options_template.png"
                      ))
 auto_info_run.pack(side="left")
+
+def test_region_with_retry():
+    """Test region with multiple template sizes. Called after calibration."""
+    config_region = calibrator.load_region()
+    manual_region = calibrator.load_region() if calibrator.has_manual_region() else None
+    auto_region = calibrator.load_auto_region() if calibrator.has_auto_region() else None
+    
+    window = window_utils.get_fh5_window()
+    if window:
+        full = window_utils.get_window_region(window)
+        default_reg = window_utils.bottom_left_quarter(full)
+    else:
+        default_reg = window_utils.bottom_left_quarter(config_region)
+    
+    # Use the same priority as sniper_loop
+    if manual_region:
+        test_reg = manual_region
+        region_type = "manual calibrated"
+    elif auto_region:
+        test_reg = auto_region
+        region_type = "auto calibrated"
+    else:
+        test_reg = default_reg
+        region_type = "default (bottom-left quarter)"
+
+    try:
+        region_test_label.config(text="Testing calibration region (this may take a moment)...", bootstyle="info")
+        root.update_idletasks()  # Force UI update to show the testing message
+        logger.update_log("🔍 Testing calibration with all templates...")
+        
+        # Use the base template with multiple scales and confidences like auto calibration
+        template_path = window_utils.resource_path("assets/auction_options_template.png")
+        scales = [0.8, 0.9, 1.0, 1.1, 1.2]
+        confidences = [0.65, 0.68, 0.7, 0.72]
+        
+        found_params = None
+        
+        for scale in scales:
+            for confidence in confidences:
+                print(f"[TEST] Trying scale={scale}, confidence={confidence}")
+                
+                try:
+                    location = vision_utils.locate_on_screen_with_variants(
+                        template_path, region=test_reg, confidence=confidence, scale_min=scale, scale_max=scale, scale_steps=1
+                    )
+                    
+                    if location is not None:
+                        found_params = (scale, confidence)
+                        region_test_label.config(
+                            text=f"✅ Calibration successful! Button detected (scale={scale}, conf={confidence})",
+                            bootstyle="success"
+                        )
+                        logger.update_log(f"✅ Button found with scale={scale}, confidence={confidence}")
+                        
+                        # Save the successful parameters to config for manual calibration
+                        config = settings.load_config()
+                        config["MANUAL_TEMPLATE_INFO"] = {
+                            "template_path": template_path,
+                            "scale": scale,
+                            "confidence": confidence
+                        }
+                        settings.save_config(config)
+                        
+                        return
+                except Exception as e:
+                    print(f"[ERROR] Exception testing scale={scale}, conf={confidence}: {e}")
+                    continue
+        
+        # If we get here, no template worked - show simple error message
+        region_test_label.config(
+            text="❌ Button not detected. Please run calibration again.",
+            bootstyle="danger"
+        )
+        logger.update_log("⚠️ Calibration test failed - trying all templates")
+        
+        # Show prompt to retry calibration
+        retry_popup = tk.Toplevel(root)
+        retry_popup.title("Retry Calibration")
+        retry_popup.transient(root)
+        retry_popup.grab_set()
+        retry_popup.resizable(False, False)
+        
+        try:
+            retry_popup.iconbitmap(window_utils.resource_path("assets/sniper.ico"))
+        except Exception:
+            pass
+
+        tb.Label(retry_popup, text="Calibration Not Detected", font=("Arial", 11, "bold")).pack(padx=20, pady=(15, 10))
+        tb.Label(retry_popup, text="The button could not be detected in the calibrated region.\nPlease try calibrating again.", 
+                 font=("Arial", 10), justify="center").pack(padx=20, pady=(0, 15))
+
+        btn_frame = tb.Frame(retry_popup)
+        btn_frame.pack(pady=(0, 15))
+        
+        def retry_calibration():
+            retry_popup.destroy()
+            threading.Thread(target=run_calibration, daemon=True).start()
+        
+        tb.Button(btn_frame, text="Retry Calibration", command=retry_calibration, bootstyle=PRIMARY).pack(side="left", padx=5)
+        tb.Button(btn_frame, text="Skip", command=retry_popup.destroy, bootstyle=SECONDARY).pack(side="left", padx=5)
+        
+        retry_popup.protocol("WM_DELETE_WINDOW", retry_popup.destroy)
+        
+    except Exception as e:
+        print(f"[ERROR] test_region_with_retry exception: {e}")
+        region_test_label.config(text=f"❌ Error: {e}", bootstyle="danger")
 
 def test_region():
     # mimic sniper_loop's region priority: manual > auto > default

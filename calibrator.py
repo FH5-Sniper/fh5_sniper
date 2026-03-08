@@ -185,10 +185,11 @@ def calibrate(status_label=None, image_callback=None, error_label=None):
             text = f"{msg} ({i})"
             print(text)
             if status_label:
+                # Use default parameter to capture text value, not reference
                 status_label.after(
                     0,
-                    lambda: status_label.config(
-                        text=text,
+                    lambda t=text: status_label.config(
+                        text=t,
                         bootstyle="info"
                     )
                 )
