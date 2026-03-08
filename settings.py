@@ -1,3 +1,12 @@
+"""Configuration management for FH5 Sniper.
+
+Functions:
+- load_timings(): Get timing settings from config
+- save_timings(): Validate and save timing settings
+- get_scans(): Get number of scans to perform
+- reset_to_defaults(): Reset all settings to defaults
+"""
+
 import json
 import os
 import window_utils
@@ -14,9 +23,9 @@ MAX_SCANS = 100000
 DEFAULT_CONFIG = {
     "scans": 1000,  # previously 'attempts'
     "TIMINGS": {
-        "buy_attempt_interval": 0.4,
+        "buy_attempt_interval": 0.6,
         "post_buy_wait": 5.0,
-        "reset_interval": 0.8,
+        "reset_interval": 0.9,
     },
     "BASELINE_WINDOW_WIDTH": 1622,
     "BASELINE_WINDOW_HEIGHT": 956,
@@ -197,7 +206,7 @@ def reset_to_defaults():
     try:
         with open(CONFIG_FILE, "r") as f:
             current_config = json.load(f)
-    except:
+    except Exception:
         current_config = {}
     
     # Preserve manual calibration if it exists

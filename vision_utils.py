@@ -239,21 +239,6 @@ def locate_on_screen_scaled(
         A 4-tuple (left, top, width, height) in screen coordinates if found,
         otherwise `None`.
     """
-    """Search the screen or region for a template at multiple scales.
-
-    Args:
-        image_path: Path to the single template image (assumed fullscreen).
-        region: Optional (left, top, width, height) to limit search.
-        confidence: Matching threshold (0-1); same semantics as PyAutoGUI.
-        grayscale: Whether to convert images to grayscale for matching.
-        scale_min: Minimum scale factor (relative to original template).
-        scale_max: Maximum scale factor. Should normally be 1.0.
-        scale_steps: Number of intermediate scales to try.
-
-    Returns:
-        A 4-tuple (left, top, width, height) in screen coordinates if found,
-        otherwise `None`.
-    """
     # take screenshot of region or full screen
     try:
         if region:

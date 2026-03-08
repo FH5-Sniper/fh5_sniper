@@ -1,3 +1,12 @@
+"""Core sniper logic for detecting and purchasing cars in Forza Horizon 5.
+
+Functions:
+- car_available(): Check if Auction Options button is visible
+- buy_sequence(): Execute buy workflow with keyboard simulation
+- sniper_loop(): Main scanning loop with focus checks and error handling
+- reset_search(): Navigate back to auction search
+"""
+
 import pyautogui
 import time
 import json
@@ -41,11 +50,13 @@ def load_config():
 
 
 def load_region():
+    """Load the calibrated auction options region from config."""
     data = load_config()
     return tuple(data["AUCTION_OPTIONS_REGION"])
 
 
 def load_timings():
+    """Load timing configuration from config."""
     data = load_config()
     return data["TIMINGS"]
 

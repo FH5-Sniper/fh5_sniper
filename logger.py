@@ -1,3 +1,10 @@
+"""Thread-safe logging system for FH5 Sniper GUI.
+
+Functions:
+- init_logger(): Initialize logger with Tkinter text widget
+- update_log(): Thread-safe logging that updates GUI and file
+"""
+
 # -------------------------
 # LOGGER
 # -------------------------
@@ -138,81 +145,3 @@ def update_log(message):
             f.write(message + "\n")
     except Exception:
         pass
-    return
-
-    # Determine icon and tag
-    icon = None
-    tag = None
-
-    # Known emoji -> color mapping
-    emoji_map = {
-        '✅': 'icon_green',
-        '❌': 'icon_red',
-        '⚠️': 'icon_yellow',
-        '🛑': 'icon_red',
-        '🚀': 'icon_blue',
-        '🔄': 'icon_blue',
-        '🔴': 'icon_red',
-        '🟢': 'icon_green',
-        '⏱️': 'icon_gray',
-    }
-
-    # If message already starts with an emoji token (separated by space), color that
-    parts = message.split(' ', 1)
-    if parts and parts[0] in emoji_map:
-        icon = parts[0]
-        rest = parts[1] if len(parts) > 1 else ''
-        tag = emoji_map.get(icon)
-    else:
-        rest = message
-
-    # If no leading emoji, check keywords to insert small colored icon
-    if icon is None:
-        low = message.lower()
-        if 'no car' in low or 'refresh' in low:
-            icon = '🔴'
-            tag = 'icon_red'
-        elif 'car found' in low or 'buying' in low:
-            icon = '🟢'
-            tag = 'icon_green'
-        elif 'buy successful' in low:
-            icon = '✅'
-            tag = 'icon_green'
-        elif 'buy failed' in low:
-            icon = '❌'
-            tag = 'icon_red'
-        elif 'starting' in low:
-            icon = '🚀'
-            tag = 'icon_blue'
-        elif 'stopped' in low:
-            icon = '🔄'
-            tag = 'icon_gray'
-
-    try:
-        log_widget.configure(state='normal')
-
-        if icon:
-            # Insert icon with tag, then the rest of the message untagged
-            log_widget.insert('end', icon + ' ', tag)
-            log_widget.insert('end', rest + '\n')
-        else:
-            log_widget.insert('end', message + '\n')
-
-        # Trim log lines to MAX_LOG_LINES
-        try:
-            total_lines = int(log_widget.index('end-1c').split('.')[0])
-            if total_lines > MAX_LOG_LINES:
-                # delete from line 1 to the amount to remove
-                remove_lines = total_lines - MAX_LOG_LINES
-                log_widget.delete('1.0', f'{remove_lines + 1}.0')
-        except Exception:
-            pass
-
-        log_widget.see('end')
-        log_widget.configure(state='disabled')
-    except Exception:
-        # If any UI error, fallback to printing
-        try:
-            print(message)
-        except Exception:
-            pass

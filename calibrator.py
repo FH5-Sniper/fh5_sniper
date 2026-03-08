@@ -1,3 +1,12 @@
+"""Calibration utilities for Forza Horizon 5 sniper.
+
+Functions:
+- calibrate(): Manual calibration with mouse position capture
+- auto_calibrate(): Automatic calibration using image recognition
+- show_region_overlay(): Display calibrated region on screen
+- load_region(): Get calibration region from config
+"""
+
 import pyautogui
 import time
 import json

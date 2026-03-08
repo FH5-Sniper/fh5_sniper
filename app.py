@@ -10,6 +10,7 @@ import logger
 from PIL import Image, ImageTk
 import window_utils
 import ctypes
+import webbrowser
 
 # optional requests availability (used for update checks)
 try:
@@ -19,8 +20,8 @@ except Exception:
     requests = None
     HAVE_REQUESTS = False
 
-# application version (bump when releasing)
-__version__ = "1.0.3"
+# application version
+__version__ = "1.0.4"
 
 # path to the static icon file (created once and checked into repo)
 _icon_file = window_utils.resource_path("assets/sniper.ico")
@@ -41,6 +42,7 @@ buy_successes = 0
 buy_failures = 0
 buy_refreshes = 0
 current_total_scans = 0
+calibration_done_this_session = False
 
 # --- DEFAULT REGION ---
 
@@ -133,10 +135,10 @@ def show_update_popup(latest_tag):
 # --- BUILD UI ---
 
 # ---------- Main Window ----------
-# use a dark theme by default; still modern but easier on eyes
+
 root = tb.Window(themename="cyborg")
 root.title("FH5 Sniper")
-# apply custom icon if available
+
 try:
     root.iconbitmap(_icon_file)
 except Exception:
@@ -309,13 +311,13 @@ def show_calibration_warning():
 
 
 def start_sniper_ui():
-    global sniper_running, stop_flag, timer_running, timer_elapsed, buy_attempts, buy_successes, buy_failures, first_sniper_session_start
+    global sniper_running, stop_flag, timer_running, timer_elapsed, buy_attempts, buy_successes, buy_failures, first_sniper_session_start, calibration_done_this_session
     if sniper_running:
         logger.update_log("⚠️ Sniper already running!")
         return
     
-    # Show recalibration reminder on first sniper start of this session
-    if first_sniper_session_start and not settings.get_skip_recalibration_reminder():
+    # Show recalibration reminder on first sniper start of this session, but skip if calibration was done this session
+    if first_sniper_session_start and not settings.get_skip_recalibration_reminder() and not calibration_done_this_session:
         first_sniper_session_start = False
         show_recalibration_reminder()
         # Check if user clicked "Calibrate Now" which sets sniper_running to False
@@ -563,8 +565,13 @@ def show_info(title, message, image_path=None):
 
 # Run calibration button
 def run_calibration():
+    global calibration_done_this_session
     region_test_label.config(text="")
     calibrator.calibrate(status_label=status_label, image_callback=update_calibration_image, error_label=region_test_label)
+
+    # Check if calibration was successful
+    if calibrator.has_manual_region():
+        calibration_done_this_session = True
 
     # update UI in main thread
     root.after(0, update_status_label)
@@ -572,11 +579,13 @@ def run_calibration():
     root.after(0, lambda: logger.update_log("✅ Manual calibration complete"))
 
 def run_auto_calibration():
+    global calibration_done_this_session
     region_test_label.config(text="")
     success = calibrator.auto_calibrate(status_label=status_label)
 
     # update UI in main thread
     if success:
+        calibration_done_this_session = True
         root.after(0, update_status_label)
         root.after(0, lambda: logger.update_log("✅ Auto calibration complete"))
     else:
@@ -842,9 +851,9 @@ settings_title_label.pack(side="left", expand=True, fill="x")
 
 # Explanatory text about settings
 settings_explain = (
-    "These settings are optimal if your internet connection is stable and your game runs without lag.\n\n"
+    "Choose a timing preset based on your PC performance and internet speed, or customize the values manually.\n\n"
     "If keystrokes are being executed too fast or the app is not keeping pace with the game, "
-    "increase the timing intervals (Buy Interval, Post Buy Wait, Reset Interval) to give the game more time to respond.\n"
+    "increase the timing intervals or choose a slower preset."
 )
 
 settings_explain_label = tb.Label(
@@ -856,12 +865,67 @@ settings_explain_label = tb.Label(
 )
 settings_explain_label.pack(pady=(10, 5))
 
+# Preset selector
+preset_frame = tb.Frame(settings_tab)
+preset_frame.pack(pady=(10, 5), fill="x")
+
+# Inner frame to hold the label and combobox centered
+row_frame = tb.Frame(preset_frame)
+row_frame.pack(anchor="center")  # Centers the inner frame horizontally
+
+preset_var = tb.StringVar(value="Custom")  # Default to Custom since we load current values
+
+# Label and combobox side by side
+tb.Label(row_frame, text="Timing Preset", font=("Arial", 12, "bold")).pack(side="left", padx=(0, 10))
+preset_combo = tb.Combobox(
+    row_frame,
+    textvariable=preset_var,
+    values=["Custom", "Fast", "Mid", "Slow"],
+    state="readonly",
+    width=15
+)
+preset_combo.pack(side="left")
+
+info_btn = tb.Button(row_frame, text="?", width=2, bootstyle="info-outline",
+                     command=lambda: show_info("Timing Presets", "Fast: For high-end PCs with fast internet\nMid: For average PCs with stable internet\nSlow: For slower PCs or laggy connections\n\n"))
+info_btn.pack(side="left", padx=(5,0))
+
+# Preset definitions
+PRESETS = {
+    "Fast": {"buy_attempt_interval": 0.4, "post_buy_wait": 4.0, "reset_interval": 0.8},
+    "Mid": {"buy_attempt_interval": 0.6, "post_buy_wait": 5.0, "reset_interval": 0.9},
+    "Slow": {"buy_attempt_interval": 0.7, "post_buy_wait": 6.0, "reset_interval": 1.1},
+}
+
+def detect_current_preset():
+    """Check if current timing values match a preset."""
+    try:
+        current = {
+            "buy_attempt_interval": float(buy_interval_var.get()),
+            "post_buy_wait": float(post_buy_wait_var.get()),
+            "reset_interval": float(reset_interval_var.get()),
+        }
+        for preset_name, preset_values in PRESETS.items():
+            if all(abs(current[key] - preset_values[key]) < 0.01 for key in preset_values):
+                return preset_name
+    except ValueError:
+        pass
+    return "Custom"
+
+def update_preset_display():
+    """Update the preset combobox to reflect current values."""
+    current_preset = detect_current_preset()
+    preset_var.set(current_preset)
+
 timings = settings.load_timings_ui()
 
-buy_interval_var = tb.StringVar(value=str(timings.get("buy_attempt_interval", 0.4)))
+buy_interval_var = tb.StringVar(value=str(timings.get("buy_attempt_interval", 0.6)))
 post_buy_wait_var = tb.StringVar(value=str(timings.get("post_buy_wait", 5.0)))
-reset_interval_var = tb.StringVar(value=str(timings.get("reset_interval", 0.8)))
+reset_interval_var = tb.StringVar(value=str(timings.get("reset_interval", 0.9)))
 attempts_var = tb.StringVar(value=str(settings.get_scans()))  # stores scans count
+
+# Set initial preset display
+update_preset_display()
 
 # helper to create row with info button
 
@@ -919,7 +983,7 @@ make_setting_row(
 )
 
 # Function to save settings
-def save_settings():
+def save_settings(message=None):
     try:
         timings_dict = {
             "buy_attempt_interval": float(buy_interval_var.get()),
@@ -940,49 +1004,47 @@ def save_settings():
     post_buy_wait_var.set(str(corrected["timings"]["post_buy_wait"]))
     reset_interval_var.set(str(corrected["timings"]["reset_interval"]))
     
+    # Update preset display
+    update_preset_display()
+    
     # update scans left label immediately
     global current_total_scans
     current_total_scans = corrected["scans"]
     scans_left_label.config(text=f"Scans left: {current_total_scans}")
     
-    if is_valid:
+    if message:
+        validation_error_label.config(text=message, bootstyle="success")
+    elif is_valid:
         validation_error_label.config(text="✅ Settings saved", bootstyle="success")
     else:
         validation_error_label.config(text=f"⚠️ {error_msg} (auto-corrected and saved)", bootstyle="warning")
-
-# Function to reset to defaults
-def reset_to_defaults():
-    config = settings.reset_to_defaults()
-    # Update UI with defaults
-    buy_interval_var.set(str(config["TIMINGS"].get("buy_attempt_interval", 0.4)))
-    post_buy_wait_var.set(str(config["TIMINGS"]["post_buy_wait"]))
-    reset_interval_var.set(str(config["TIMINGS"]["reset_interval"]))
-    attempts_var.set(str(config.get("scans", config.get("attempts", 1000))))
-    # reflect new count in scans left label
-    global current_total_scans
-    current_total_scans = config.get("scans", config.get("attempts", 1000))
-    scans_left_label.config(text=f"Scans left: {current_total_scans}")
-    validation_error_label.config(text="✅ Reset to defaults", bootstyle="success")
 
 button_frame = tb.Frame(settings_tab)
 button_frame.pack(pady=10)
 
 tb.Button(button_frame, text="Save Settings", command=save_settings, bootstyle="success").pack(side="left", padx=5)
-tb.Button(button_frame, text="Reset to Defaults", command=reset_to_defaults, bootstyle="warning").pack(side="left", padx=5)
 
 validation_error_label = tb.Label(settings_tab, text="", font=("Arial", 11))
 validation_error_label.pack(pady=5)
 
-bottom_row = tb.Frame(settings_tab)
-bottom_row.pack(fill="x", pady=8, padx=10)
+def apply_preset():
+    """Apply the selected preset values to the UI and auto-save if not Custom."""
+    preset_name = preset_var.get()
+    if preset_name in PRESETS:
+        preset_values = PRESETS[preset_name]
+        buy_interval_var.set(str(preset_values["buy_attempt_interval"]))
+        post_buy_wait_var.set(str(preset_values["post_buy_wait"]))
+        reset_interval_var.set(str(preset_values["reset_interval"]))
+        if preset_name != "Custom":
+            save_settings(message=f"✅ {preset_name} applied, settings saved!")
+        else:
+            validation_error_label.config(text=f"✅ Applied {preset_name} preset", bootstyle="success")
 
-tb.Button(
-    bottom_row,
-    text="Check for updates",
-    command=lambda: threading.Thread(target=lambda: _run_update_check(interactive=True), daemon=True).start(),
-    bootstyle=INFO,
-    width=18,
-).pack(side="right")
+def on_preset_change(*args):
+    """Called when preset selection changes."""
+    apply_preset()
+
+preset_var.trace_add("write", on_preset_change)
 
 def _run_update_check(interactive=False, test_latest=None):
     """Run check_for_updates in background; if interactive=True show popup when newer."""
@@ -1014,5 +1076,28 @@ def _run_update_check(interactive=False, test_latest=None):
 # update status and button states on startup
 update_status_label()
 update_button_states()
+
+# ---------- Info Tab ----------
+info_tab = tb.Frame(notebook)
+notebook.add(info_tab, text="Info")
+
+tb.Label(info_tab, text="Project information and support links", font=("Arial", 12)).pack(pady=20)
+
+# GitHub link
+github_frame = tb.Frame(info_tab)
+github_frame.pack(pady=10)
+tb.Label(github_frame, text="View the project on GitHub", font=("Arial", 10)).pack(side="left")
+tb.Button(github_frame, text="Open", command=lambda: webbrowser.open("https://github.com/FH5-Sniper/fh5_sniper"), bootstyle=PRIMARY, width=8).pack(side="left", padx=(10,0))
+
+# PayPal link
+paypal_frame = tb.Frame(info_tab)
+paypal_frame.pack(pady=10)
+tb.Label(paypal_frame, text="Support the project via PayPal", font=("Arial", 10)).pack(side="left")
+tb.Button(paypal_frame, text="Donate", command=lambda: webbrowser.open("https://www.paypal.com/ncp/payment/W2FY4KHD58UEG"), bootstyle=SUCCESS, width=8).pack(side="left", padx=(10,0))
+
+# Update check
+update_frame = tb.Frame(info_tab)
+update_frame.pack(pady=10)
+tb.Button(update_frame, text="Check for updates", command=lambda: threading.Thread(target=lambda: _run_update_check(interactive=True), daemon=True).start(), bootstyle=INFO, width=18).pack()
 
 root.mainloop()
